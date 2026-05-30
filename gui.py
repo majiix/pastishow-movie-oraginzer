@@ -44,12 +44,30 @@ COLOR_MAC_RED_BG = "#2D1214"      # Soft red background for hover
 def register_context_menu():
     try:
         import winreg
+        import shutil
+        
+        persistent_icon = os.path.abspath(os.path.expanduser("~/.movie_organizer_icon.ico"))
+        
         if getattr(sys, 'frozen', False):
             # Running as compiled exe
             exe_path = os.path.abspath(sys.executable)
             cmd = f'"{exe_path}" "%1"'
             bg_cmd = f'"{exe_path}" "%v"'
-            icon_path = exe_path
+            
+            # First priority: copy from sys._MEIPASS if available
+            ico_source = None
+            if hasattr(sys, '_MEIPASS'):
+                ico_source = os.path.join(sys._MEIPASS, "app_icon.ico")
+            
+            if not ico_source or not os.path.exists(ico_source):
+                exe_dir = os.path.dirname(exe_path)
+                parent_dir = os.path.dirname(exe_dir)
+                potential_ico1 = os.path.join(exe_dir, "app_icon.ico")
+                potential_ico2 = os.path.join(parent_dir, "app_icon.ico")
+                if os.path.exists(potential_ico1):
+                    ico_source = potential_ico1
+                elif os.path.exists(potential_ico2):
+                    ico_source = potential_ico2
         else:
             # Running as script
             script_path = os.path.abspath(sys.argv[0])
@@ -57,18 +75,35 @@ def register_context_menu():
             cmd = f'"{python_exe}" "{script_path}" "%1"'
             bg_cmd = f'"{python_exe}" "{script_path}" "%v"'
             script_dir = os.path.dirname(script_path)
-            potential_icon = os.path.join(script_dir, "app_icon.ico")
-            if os.path.exists(potential_icon):
-                icon_path = potential_icon
-            else:
-                icon_path = None
+            ico_source = os.path.join(script_dir, "app_icon.ico")
+
+        # Copy the icon to the persistent home directory location
+        if ico_source and os.path.exists(ico_source):
+            try:
+                shutil.copy(ico_source, persistent_icon)
+            except Exception:
+                pass
+
+        # Select the best icon path for registry
+        if os.path.exists(persistent_icon):
+            icon_path = persistent_icon
+        elif ico_source and os.path.exists(ico_source):
+            icon_path = ico_source
+        else:
+            icon_path = exe_path if getattr(sys, 'frozen', False) else None
+
+        # Format icon path for registry (quotes if there are spaces)
+        if icon_path:
+            icon_path_reg = f'"{icon_path}"' if ' ' in icon_path else icon_path
+        else:
+            icon_path_reg = None
 
         # 1. Directory Shell context menu (right-clicking a folder)
         key_path = r"Software\Classes\directory\shell\MovieOrganizer"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValue(key, "", winreg.REG_SZ, "Organize Movies here")
-            if icon_path:
-                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_path)
+            if icon_path_reg:
+                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_path_reg)
             
             with winreg.CreateKeyEx(key, "command", 0, winreg.KEY_SET_VALUE) as subkey:
                 winreg.SetValue(subkey, "", winreg.REG_SZ, cmd)
@@ -77,8 +112,8 @@ def register_context_menu():
         bg_key_path = r"Software\Classes\Directory\Background\shell\MovieOrganizer"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, bg_key_path, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValue(key, "", winreg.REG_SZ, "Organize Movies here")
-            if icon_path:
-                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_path)
+            if icon_path_reg:
+                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_path_reg)
                 
             with winreg.CreateKeyEx(key, "command", 0, winreg.KEY_SET_VALUE) as subkey:
                 winreg.SetValue(subkey, "", winreg.REG_SZ, bg_cmd)
@@ -129,6 +164,47 @@ class MovieOrganizerApp(ctk.CTk):
         # Set themes
         ctk.set_appearance_mode("dark")
         
+        # Determine persistent icon and copy it to home directory
+        self.persistent_ico = os.path.abspath(os.path.expanduser("~/.movie_organizer_icon.ico"))
+        ico_source = None
+        if getattr(sys, 'frozen', False):
+            # Compiled exe
+            base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
+            ico_source = os.path.join(base_path, "app_icon.ico")
+        else:
+            # Running as script
+            script_dir = os.path.dirname(os.path.abspath(sys.argv[0] if sys.argv else __file__))
+            ico_source = os.path.join(script_dir, "app_icon.ico")
+            
+        if ico_source and os.path.exists(ico_source):
+            try:
+                import shutil
+                if not os.path.exists(self.persistent_ico) or os.path.getmtime(ico_source) > os.path.getmtime(self.persistent_ico):
+                    shutil.copy(ico_source, self.persistent_ico)
+            except Exception:
+                pass
+                
+        # Set Taskbar App ID for Windows to display custom icon on taskbar
+        if sys.platform.startswith("win"):
+            try:
+                import ctypes
+                myappid = f"PastiShow.MovieOrganizer.App.{__version__}"
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except Exception:
+                pass
+
+        # Set Tkinter window icon
+        if os.path.exists(self.persistent_ico):
+            try:
+                self.iconbitmap(self.persistent_ico)
+            except Exception:
+                pass
+        elif ico_source and os.path.exists(ico_source):
+            try:
+                self.iconbitmap(ico_source)
+            except Exception:
+                pass
+        
         # Set start directory
         if start_dir and os.path.isdir(start_dir):
             self.current_dir = os.path.abspath(start_dir)
@@ -154,6 +230,9 @@ class MovieOrganizerApp(ctk.CTk):
         
         # Initial scan on startup
         self.scan_folder()
+        
+        # Hook window close event
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def create_widgets(self):
         # Configure overall grid: Column 0 (Sidebar), Column 1 (Main Content Area)
@@ -309,6 +388,19 @@ class MovieOrganizerApp(ctk.CTk):
             anchor="w"
         )
         warning_msg.pack(fill="x", padx=12, pady=(0, 10))
+
+        self.retry_conn_btn = ctk.CTkButton(
+            self.warning_card,
+            text="Retry Connection",
+            height=24,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#f87171",
+            hover_color="#ef4444",
+            text_color="#1e1e1e",
+            corner_radius=6,
+            command=self.retry_connection
+        )
+        self.retry_conn_btn.pack(fill="x", padx=12, pady=(0, 12))
 
 
         # ==================== MAIN PANEL ====================
@@ -803,6 +895,46 @@ class MovieOrganizerApp(ctk.CTk):
         else:
             self.warning_card.pack_forget()
 
+    def retry_connection(self):
+        self.retry_conn_btn.configure(state="disabled", text="Checking...")
+        self.status_msg.configure(text="Checking connection to OMDb...", text_color="#FFFFFF")
+        
+        omdb_key = self.omdb_key
+        proxy_url = self.proxy_url
+        
+        def _bg_check():
+            try:
+                success = self.organizer.check_connection(api_key=omdb_key, proxy_url=proxy_url)
+                if success:
+                    self.organizer.connection_failed = False
+                    self.after(0, self.connection_restored)
+                else:
+                    self.after(0, self.connection_retry_failed)
+            except Exception:
+                self.after(0, self.connection_retry_failed)
+                
+        threading.Thread(target=_bg_check, daemon=True).start()
+
+    def connection_restored(self):
+        self.retry_conn_btn.configure(state="normal", text="Retry Connection")
+        self.update_connection_warning()
+        self.status_msg.configure(text="Connection to OMDb restored successfully!", text_color=COLOR_MAC_GREEN)
+
+    def connection_retry_failed(self):
+        self.retry_conn_btn.configure(state="normal", text="Retry Connection")
+        self.status_msg.configure(text="Connection check failed. OMDb is still unreachable.", text_color=COLOR_MAC_RED)
+
+    def on_close(self):
+        # 1. Clean up history log
+        history_file = os.path.join(self.current_dir, '.organizer_history.json')
+        if os.path.exists(history_file):
+            try:
+                os.remove(history_file)
+            except Exception:
+                pass
+                
+        self.destroy()
+
     def undo_organization(self):
         self.status_msg.configure(text="Reversing last action...", text_color="#FFFFFF")
         self.progress_bar.pack(anchor="w", pady=(4, 0))
@@ -1067,6 +1199,63 @@ class PreferencesWindow(ctk.CTkToplevel):
             command=self.save_and_close
         )
         save_btn.pack(side="left")
+        
+        # Enable clipboard copy-paste shortcuts on entry fields
+        self.enable_clipboard_shortcuts(self.size_entry)
+        self.enable_clipboard_shortcuts(self.undo_entry)
+        self.enable_clipboard_shortcuts(self.key_entry)
+        self.enable_clipboard_shortcuts(self.proxy_entry)
+        
+    def enable_clipboard_shortcuts(self, entry_widget):
+        try:
+            entry = entry_widget._entry
+        except AttributeError:
+            entry = entry_widget
+            
+        def select_all(event):
+            entry.select_range(0, tk.END)
+            entry.icursor(tk.END)
+            return "break"
+            
+        def copy(event):
+            try:
+                selected_text = entry.selection_get()
+                self.clipboard_clear()
+                self.clipboard_append(selected_text)
+            except tk.TclError:
+                pass
+            return "break"
+            
+        def cut(event):
+            try:
+                selected_text = entry.selection_get()
+                self.clipboard_clear()
+                self.clipboard_append(selected_text)
+                entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+            except tk.TclError:
+                pass
+            return "break"
+            
+        def paste(event):
+            try:
+                text = self.clipboard_get()
+                try:
+                    entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                except tk.TclError:
+                    pass
+                entry.insert(tk.INSERT, text)
+            except tk.TclError:
+                pass
+            return "break"
+            
+        entry.bind("<Control-a>", select_all)
+        entry.bind("<Control-c>", copy)
+        entry.bind("<Control-v>", paste)
+        entry.bind("<Control-x>", cut)
+        entry.bind("<Control-A>", select_all)
+        entry.bind("<Control-C>", copy)
+        entry.bind("<Control-V>", paste)
+        entry.bind("<Control-X>", cut)
         
     def save_and_close(self):
         try:

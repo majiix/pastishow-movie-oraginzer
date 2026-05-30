@@ -34,14 +34,19 @@ def run_build():
     add_data_arg = f"--add-data={ctk_dir}{sep}customtkinter"
     
     icon_arg = []
+    icon_data_args = []
     if os.path.exists("app_icon.ico"):
         icon_arg = ["--icon=app_icon.ico"]
+        icon_data_args.append(f"--add-data=app_icon.ico{sep}.")
+    if os.path.exists("app_icon.png"):
+        icon_data_args.append(f"--add-data=app_icon.png{sep}.")
     
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile",
-        "--noconsole"
-    ] + icon_arg + [
+        "--noconsole",
+        "--clean"
+    ] + icon_arg + icon_data_args + [
         add_data_arg,
         "--name=MovieOrganizer",
         "main.py"

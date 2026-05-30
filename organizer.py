@@ -5,6 +5,7 @@ import ssl
 import urllib.request
 import urllib.parse
 import urllib.error
+import time
 from datetime import datetime
 
 __version__ = "1.0.0"
@@ -40,6 +41,30 @@ class MovieOrganizer:
                     f_dbg.write(message + "\n")
             except Exception:
                 pass
+
+    def check_connection(self, api_key=None, proxy_url=None):
+        """
+        Checks if OMDb connection can be established.
+        Returns True if successful, False otherwise.
+        """
+        ssl_context = ssl._create_unverified_context()
+        handlers = [urllib.request.HTTPSHandler(context=ssl_context), urllib.request.HTTPHandler]
+        if proxy_url:
+            if proxy_url.lower() == 'none':
+                handlers.append(urllib.request.ProxyHandler({}))
+            else:
+                handlers.append(urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+        
+        opener = urllib.request.build_opener(*handlers)
+        params = {'apikey': api_key or 'dummy'}
+        url = "https://www.omdbapi.com/?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={'User-Agent': 'MovieOrganizer/1.0'})
+        try:
+            with opener.open(req, timeout=2.5) as response:
+                response.read()
+                return True
+        except Exception:
+            return False
 
     def clean_name(self, filename):
         """
@@ -236,8 +261,10 @@ class MovieOrganizer:
                     if isinstance(e, urllib.error.URLError) or "timeout" in str(e).lower() or "connection" in str(e).lower():
                         self.connection_failed = True
             
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                list(executor.map(fetch_rating, sorted_movies))
+            # Fetch ratings sequentially, one by one, to avoid flooding OMDb API
+            for movie in sorted_movies:
+                fetch_rating(movie)
+                time.sleep(0.15)
                 
         return sorted_movies, ignored_count
 

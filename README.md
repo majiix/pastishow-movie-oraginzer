@@ -21,6 +21,7 @@ A premium, modern desktop application designed to scan, fetch metadata for, and 
   - Offline compatibility, utilizing responsive styling.
 - **Windows Integration:** Right-click context menu integration for instant folder scanning directly from Windows Explorer (using custom app-themed icons).
 - **Network Proxy & Override Controls:** Full support for custom HTTP, HTTPS, or SOCKS5 proxies to bypass ISP-level blockades, including a manual override to disable broken system proxies.
+- **Dynamic Connectivity Warning:** Displays a real-time warning card in the sidebar if the OMDb server is unreachable or internet connectivity is lost, complete with an asynchronous "Retry Connection" check button to dynamically hide the warning once connection is restored.
 - **Tuned Safety Undo:** Instantly revert all folder renames, file moves, and downloaded poster or generated details pages with a single click. Undo timeouts can be configured in settings (default: 15 seconds) to finalize changes automatically.
 
 ---
