@@ -1,0 +1,25 @@
+# PyInstaller & Build
+build/
+dist/
+*.spec
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local configuration & logs
+.organizer_debug.log
+.organizer_history.json
+.movie_organizer_config.json
+
+# IDEs and System files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Testing output
+test_movie_dir/
+test_movie_dir_fallback/
