@@ -213,6 +213,7 @@ class MovieOrganizerApp(ctk.CTk):
             
         self.movies_data = []
         self.row_widgets = []
+        self.scan_running = False
         
         # Load Config
         self.config = load_config()
@@ -430,6 +431,36 @@ class MovieOrganizerApp(ctk.CTk):
         )
         self.stats_label.grid(row=0, column=1, sticky="e")
 
+        # Select All / Deselect All controls
+        controls_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        controls_frame.grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        
+        self.select_all_btn = ctk.CTkButton(
+            controls_frame,
+            text="☑ Select All",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            fg_color="transparent",
+            text_color=COLOR_MAC_ACCENT,
+            hover_color=COLOR_MAC_CARD,
+            width=80,
+            height=22,
+            command=self.select_all_movies
+        )
+        self.select_all_btn.pack(side="left", padx=(0, 10))
+        
+        self.deselect_all_btn = ctk.CTkButton(
+            controls_frame,
+            text="☒ Deselect All",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            fg_color="transparent",
+            text_color=COLOR_MAC_MUTED,
+            hover_color=COLOR_MAC_CARD,
+            width=90,
+            height=22,
+            command=self.deselect_all_movies
+        )
+        self.deselect_all_btn.pack(side="left")
+
         # Scrollable list of movies
         self.scroll_frame = ctk.CTkScrollableFrame(
             main_panel,
@@ -537,35 +568,6 @@ class MovieOrganizerApp(ctk.CTk):
         self.progress_bar.configure(mode="indefinite")
         self.progress_bar.start()
         
-        # Disable buttons during scan
-        self.organize_btn.configure(state="disabled")
-        self.scan_btn.configure(state="disabled")
-        
-        min_size = self.min_size_mb
-        scan_sub = self.scan_subfolders_val
-        omdb_key = self.omdb_key
-        proxy_url = self.proxy_url
-        
-        # Run scanning in thread
-        def _bg_scan():
-            try:
-                movies, ignored_count = self.organizer.scan_movies(
-                    min_size_mb=min_size, 
-                    scan_subfolders=scan_sub, 
-                    api_key=omdb_key,
-                    proxy_url=proxy_url
-                )
-                self.after(0, lambda: self.finish_scan(movies, ignored_count, min_size))
-            except Exception as e:
-                self.after(0, lambda: self.scan_failed(str(e)))
-                
-        threading.Thread(target=_bg_scan, daemon=True).start()
-
-    def finish_scan(self, movies, ignored_count, min_size):
-        self.progress_bar.stop()
-        self.progress_bar.pack_forget()
-        self.scan_btn.configure(state="normal")
-        
         # Clear existing card rows
         for row in self.row_widgets:
             for w in row.values():
@@ -575,6 +577,281 @@ class MovieOrganizerApp(ctk.CTk):
                     except Exception:
                         pass
         self.row_widgets = []
+        self.movies_data = []
+        self.empty_label.pack_forget()
+        
+        # Setup pause toggle state and scan button
+        self.scan_running = True
+        self.scan_paused = False
+        self.scan_btn.configure(
+            text="⏸ Pause Scan", 
+            fg_color=COLOR_MAC_CARD, 
+            hover_color="#3A3A3C",
+            state="normal",
+            command=self.toggle_scan_pause
+        )
+        self.organize_btn.configure(state="disabled")
+        
+        min_size = self.min_size_mb
+        scan_sub = self.scan_subfolders_val
+        omdb_key = self.omdb_key
+        proxy_url = self.proxy_url
+        
+        def on_movie_scanned(movie):
+            self.after(0, lambda: self.add_scanned_movie_to_ui(movie))
+            
+        def is_paused_fn():
+            return getattr(self, "scan_paused", False)
+            
+        # Run scanning in thread
+        def _bg_scan():
+            try:
+                movies, ignored_count = self.organizer.scan_movies(
+                    min_size_mb=min_size, 
+                    scan_subfolders=scan_sub, 
+                    api_key=omdb_key,
+                    proxy_url=proxy_url,
+                    on_movie_scanned=on_movie_scanned,
+                    is_paused_fn=is_paused_fn
+                )
+                self.after(0, lambda: self.finish_scan(movies, ignored_count, min_size))
+            except Exception as e:
+                self.after(0, lambda: self.scan_failed(str(e)))
+                
+        threading.Thread(target=_bg_scan, daemon=True).start()
+
+    def toggle_scan_pause(self):
+        self.scan_paused = not getattr(self, "scan_paused", False)
+        if self.scan_paused:
+            self.scan_btn.configure(
+                text="▶ Resume Scan", 
+                fg_color=COLOR_MAC_ACCENT, 
+                hover_color=COLOR_MAC_ACCENT_HOVER
+            )
+            self.status_msg.configure(text="Scan paused.", text_color=COLOR_MAC_MUTED)
+        else:
+            self.scan_btn.configure(
+                text="⏸ Pause Scan", 
+                fg_color=COLOR_MAC_CARD, 
+                hover_color="#3A3A3C"
+            )
+            self.status_msg.configure(text="Scanning folder for movies...", text_color="#FFFFFF")
+
+    def add_scanned_movie_to_ui(self, movie):
+        self.movies_data.append(movie)
+        idx = len(self.movies_data) - 1
+        self.render_movie_card(movie, idx)
+        
+        display_title = movie.get('parsed_title', '')
+        self.status_msg.configure(text=f"Scanned: {display_title}", text_color="#FFFFFF")
+        self.update_selection_stats()
+
+    def render_movie_card(self, movie, idx):
+        card = ctk.CTkFrame(
+            self.scroll_frame, 
+            fg_color=COLOR_MAC_CARD, 
+            border_width=1, 
+            border_color=COLOR_MAC_CARD_BORDER,
+            height=56,
+            corner_radius=10
+        )
+        card.pack(fill="x", pady=6, padx=4)
+        card.pack_propagate(False)
+        
+        # Grid columns for card layout: Checkbox, Original Filename, Arrow icon, Editable Title, Editable Year, Badge area
+        card.grid_columnconfigure(0, weight=0, minsize=40)  # Checkbox
+        card.grid_columnconfigure(1, weight=3)              # Original Filename
+        card.grid_columnconfigure(2, weight=0, minsize=30)  # Arrow pointer
+        card.grid_columnconfigure(3, weight=3)              # Editable Title
+        card.grid_columnconfigure(4, weight=0, minsize=80)  # Editable Year
+        card.grid_columnconfigure(5, weight=0, minsize=240) # Badges
+        
+        # 1. Checkbox
+        chk_var = tk.BooleanVar(value=True)
+        cb = ctk.CTkCheckBox(
+            card, 
+            text="", 
+            variable=chk_var, 
+            width=18,
+            fg_color=COLOR_MAC_ACCENT,
+            hover_color=COLOR_MAC_ACCENT_HOVER,
+            border_color=COLOR_MAC_CARD_BORDER,
+            corner_radius=4,
+            command=self.update_selection_stats
+        )
+        cb.grid(row=0, column=0, padx=(15, 0), pady=14, sticky="w")
+        
+        # 2. Original Filename (Truncated nicely for macOS aesthetic)
+        orig_name = movie['original_filename']
+        display_name = orig_name if len(orig_name) <= 28 else orig_name[:25] + "..."
+        orig_lbl = ctk.CTkLabel(
+            card, 
+            text=display_name, 
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=COLOR_MAC_MUTED,
+            anchor="w"
+        )
+        orig_lbl.grid(row=0, column=1, padx=(10, 5), pady=14, sticky="ew")
+        
+        # 3. Arrow Indicator
+        arrow_lbl = ctk.CTkLabel(
+            card, 
+            text="→", 
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=COLOR_MAC_MUTED
+        )
+        arrow_lbl.grid(row=0, column=2, pady=14)
+        
+        # 4. Editable Title Entry (Sleek text input)
+        title_var = tk.StringVar(value=movie['parsed_title'])
+        title_entry = ctk.CTkEntry(
+            card, 
+            textvariable=title_var, 
+            height=28,
+            fg_color=COLOR_MAC_INPUT,
+            border_color=COLOR_MAC_CARD_BORDER,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#FFFFFF",
+            corner_radius=6
+        )
+        title_entry.grid(row=0, column=3, padx=10, pady=14, sticky="ew")
+        
+        # 5. Editable Year Entry
+        year_var = tk.StringVar(value=movie['parsed_year'] or "")
+        year_entry = ctk.CTkEntry(
+            card, 
+            textvariable=year_var, 
+            height=28, 
+            width=60, 
+            fg_color=COLOR_MAC_INPUT,
+            border_color=COLOR_MAC_CARD_BORDER,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#FFFFFF",
+            justify="center",
+            corner_radius=6
+        )
+        year_entry.grid(row=0, column=4, padx=5, pady=14)
+        
+        # 6. Details Badges
+        badges_frame = ctk.CTkFrame(card, fg_color="transparent")
+        badges_frame.grid(row=0, column=5, padx=15, pady=14, sticky="e")
+        
+        # TV Show badge (Orange)
+        if movie.get('is_tv_show'):
+            tv_badge = ctk.CTkLabel(
+                badges_frame, 
+                text="SERIES", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color="#FF9500", # macOS orange
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=48,
+                height=18
+            )
+            tv_badge.pack(side="left", padx=2)
+        
+        # IMDb Rating badge
+        rating_val = movie.get('imdb_rating')
+        if rating_val:
+            rating_badge = ctk.CTkLabel(
+                badges_frame, 
+                text=f"⭐ {rating_val}", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color="#F5C518",
+                text_color="#000000",
+                corner_radius=4,
+                width=48,
+                height=18
+            )
+            rating_badge.pack(side="left", padx=2)
+            
+        # Genre badge (Purple)
+        genre_val = movie.get('genre')
+        if genre_val:
+            first_genre = genre_val.split(',')[0].strip().upper()
+            genre_badge = ctk.CTkLabel(
+                badges_frame, 
+                text=first_genre, 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color="#5856D6", # macOS purple
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=55,
+                height=18
+            )
+            genre_badge.pack(side="left", padx=2)
+        
+        # Size badge
+        size_val = movie['size_mb']
+        size_txt = f"{size_val / 1024:.1f} GB" if size_val >= 1000 else f"{int(size_val)} MB"
+        size_badge = ctk.CTkLabel(
+            badges_frame, 
+            text=size_txt, 
+            font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+            fg_color="#3A3A3C",
+            text_color="#FFFFFF",
+            corner_radius=4,
+            width=55,
+            height=18
+        )
+        size_badge.pack(side="left", padx=2)
+        
+        # Subtitle badge (Green)
+        associated_files = movie.get('associated_files', [])
+        subtitle_exts = {'.srt', '.ass', '.sub', '.idx', '.vtt', '.ssa'}
+        sub_count = len([f for f in associated_files if os.path.splitext(f)[1].lower() in subtitle_exts])
+        if sub_count > 0:
+            sub_badge = ctk.CTkLabel(
+                badges_frame, 
+                text=f"SUB x{sub_count}" if sub_count > 1 else "SUB", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color=COLOR_MAC_GREEN,
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=42,
+                height=18
+            )
+            sub_badge.pack(side="left", padx=2)
+            
+        # Info badge (Blue)
+        info_count = len(associated_files) - sub_count
+        if info_count > 0:
+            info_badge = ctk.CTkLabel(
+                badges_frame, 
+                text=f"INF x{info_count}" if info_count > 1 else "INF", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color=COLOR_MAC_ACCENT,
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=42,
+                height=18
+            )
+            info_badge.pack(side="left", padx=2)
+        
+        # Store references
+        self.row_widgets.append({
+            'frame': card,
+            'chk_var': chk_var,
+            'title_var': title_var,
+            'year_var': year_var,
+            'movie_idx': idx
+        })
+
+    def finish_scan(self, movies, ignored_count, min_size):
+        self.scan_running = False
+        self.progress_bar.stop()
+        self.progress_bar.pack_forget()
+        
+        # Restore scan button
+        self.scan_btn.configure(
+            text="Scan Directory",
+            fg_color=COLOR_MAC_ACCENT,
+            hover_color=COLOR_MAC_ACCENT_HOVER,
+            command=self.scan_folder,
+            state="normal"
+        )
+        
+        # Sync final list of movies in case there are any modifications
         self.movies_data = movies
         
         if not movies:
@@ -592,199 +869,6 @@ class MovieOrganizerApp(ctk.CTk):
             return
             
         self.empty_label.pack_forget()
-        
-        # Render cards dynamically
-        for idx, movie in enumerate(movies):
-            card = ctk.CTkFrame(
-                self.scroll_frame, 
-                fg_color=COLOR_MAC_CARD, 
-                border_width=1, 
-                border_color=COLOR_MAC_CARD_BORDER,
-                height=56,
-                corner_radius=10
-            )
-            card.pack(fill="x", pady=6, padx=4)
-            card.pack_propagate(False)
-            
-            # Grid columns for card layout: Checkbox, Original Filename, Arrow icon, Editable Title, Editable Year, Badge area
-            card.grid_columnconfigure(0, weight=0, minsize=40)  # Checkbox
-            card.grid_columnconfigure(1, weight=3)              # Original Filename
-            card.grid_columnconfigure(2, weight=0, minsize=30)  # Arrow pointer
-            card.grid_columnconfigure(3, weight=3)              # Editable Title
-            card.grid_columnconfigure(4, weight=0, minsize=80)  # Editable Year
-            card.grid_columnconfigure(5, weight=0, minsize=240) # Badges
-            
-            # 1. Checkbox
-            chk_var = tk.BooleanVar(value=True)
-            cb = ctk.CTkCheckBox(
-                card, 
-                text="", 
-                variable=chk_var, 
-                width=18,
-                fg_color=COLOR_MAC_ACCENT,
-                hover_color=COLOR_MAC_ACCENT_HOVER,
-                border_color=COLOR_MAC_CARD_BORDER,
-                corner_radius=4,
-                command=self.update_selection_stats
-            )
-            cb.grid(row=0, column=0, padx=(15, 0), pady=14, sticky="w")
-            
-            # 2. Original Filename (Truncated nicely for macOS aesthetic)
-            orig_name = movie['original_filename']
-            display_name = orig_name if len(orig_name) <= 28 else orig_name[:25] + "..."
-            orig_lbl = ctk.CTkLabel(
-                card, 
-                text=display_name, 
-                font=ctk.CTkFont(family="Consolas", size=11),
-                text_color=COLOR_MAC_MUTED,
-                anchor="w"
-            )
-            orig_lbl.grid(row=0, column=1, padx=(10, 5), pady=14, sticky="ew")
-            
-            # 3. Arrow Indicator
-            arrow_lbl = ctk.CTkLabel(
-                card, 
-                text="→", 
-                font=ctk.CTkFont(size=14, weight="bold"),
-                text_color=COLOR_MAC_MUTED
-            )
-            arrow_lbl.grid(row=0, column=2, pady=14)
-            
-            # 4. Editable Title Entry (Sleek text input)
-            title_var = tk.StringVar(value=movie['parsed_title'])
-            title_entry = ctk.CTkEntry(
-                card, 
-                textvariable=title_var, 
-                height=28,
-                fg_color=COLOR_MAC_INPUT,
-                border_color=COLOR_MAC_CARD_BORDER,
-                font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-                text_color="#FFFFFF",
-                corner_radius=6
-            )
-            title_entry.grid(row=0, column=3, padx=10, pady=14, sticky="ew")
-            
-            # 5. Editable Year Entry
-            year_var = tk.StringVar(value=movie['parsed_year'] or "")
-            year_entry = ctk.CTkEntry(
-                card, 
-                textvariable=year_var, 
-                height=28, 
-                width=60, 
-                fg_color=COLOR_MAC_INPUT,
-                border_color=COLOR_MAC_CARD_BORDER,
-                font=ctk.CTkFont(family="Segoe UI", size=12),
-                text_color="#FFFFFF",
-                justify="center",
-                corner_radius=6
-            )
-            year_entry.grid(row=0, column=4, padx=5, pady=14)
-            
-            # 6. Details Badges
-            badges_frame = ctk.CTkFrame(card, fg_color="transparent")
-            badges_frame.grid(row=0, column=5, padx=15, pady=14, sticky="e")
-            
-            # TV Show badge (Orange)
-            if movie.get('is_tv_show'):
-                tv_badge = ctk.CTkLabel(
-                    badges_frame, 
-                    text="SERIES", 
-                    font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                    fg_color="#FF9500", # macOS orange
-                    text_color="#FFFFFF",
-                    corner_radius=4,
-                    width=48,
-                    height=18
-                )
-                tv_badge.pack(side="left", padx=2)
-            
-            # IMDb Rating badge
-            rating_val = movie.get('imdb_rating')
-            if rating_val:
-                rating_badge = ctk.CTkLabel(
-                    badges_frame, 
-                    text=f"⭐ {rating_val}", 
-                    font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                    fg_color="#F5C518",
-                    text_color="#000000",
-                    corner_radius=4,
-                    width=48,
-                    height=18
-                )
-                rating_badge.pack(side="left", padx=2)
-                
-            # Genre badge (Purple)
-            genre_val = movie.get('genre')
-            if genre_val:
-                first_genre = genre_val.split(',')[0].strip().upper()
-                genre_badge = ctk.CTkLabel(
-                    badges_frame, 
-                    text=first_genre, 
-                    font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                    fg_color="#5856D6", # macOS purple
-                    text_color="#FFFFFF",
-                    corner_radius=4,
-                    width=55,
-                    height=18
-                )
-                genre_badge.pack(side="left", padx=2)
-            
-            # Size badge
-            size_val = movie['size_mb']
-            size_txt = f"{size_val / 1024:.1f} GB" if size_val >= 1000 else f"{int(size_val)} MB"
-            size_badge = ctk.CTkLabel(
-                badges_frame, 
-                text=size_txt, 
-                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                fg_color="#3A3A3C",
-                text_color="#FFFFFF",
-                corner_radius=4,
-                width=55,
-                height=18
-            )
-            size_badge.pack(side="left", padx=2)
-            
-            # Subtitle badge (Green)
-            associated_files = movie.get('associated_files', [])
-            subtitle_exts = {'.srt', '.ass', '.sub', '.idx', '.vtt', '.ssa'}
-            sub_count = len([f for f in associated_files if os.path.splitext(f)[1].lower() in subtitle_exts])
-            if sub_count > 0:
-                sub_badge = ctk.CTkLabel(
-                    badges_frame, 
-                    text=f"SUB x{sub_count}" if sub_count > 1 else "SUB", 
-                    font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                    fg_color=COLOR_MAC_GREEN,
-                    text_color="#FFFFFF",
-                    corner_radius=4,
-                    width=42,
-                    height=18
-                )
-                sub_badge.pack(side="left", padx=2)
-                
-            # Info badge (Blue)
-            info_count = len(associated_files) - sub_count
-            if info_count > 0:
-                info_badge = ctk.CTkLabel(
-                    badges_frame, 
-                    text=f"INF x{info_count}" if info_count > 1 else "INF", 
-                    font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                    fg_color=COLOR_MAC_ACCENT,
-                    text_color="#FFFFFF",
-                    corner_radius=4,
-                    width=42,
-                    height=18
-                )
-                info_badge.pack(side="left", padx=2)
-            
-            # Store references
-            self.row_widgets.append({
-                'frame': card,
-                'chk_var': chk_var,
-                'title_var': title_var,
-                'year_var': year_var,
-                'movie_idx': idx
-            })
-            
         self.update_selection_stats()
         
         status_txt = f"Scan complete. Found {len(movies)} movie(s)."
@@ -797,9 +881,18 @@ class MovieOrganizerApp(ctk.CTk):
         self.update_connection_warning()
 
     def scan_failed(self, err_msg):
+        self.scan_running = False
         self.progress_bar.stop()
         self.progress_bar.pack_forget()
-        self.scan_btn.configure(state="normal")
+        
+        # Restore scan button
+        self.scan_btn.configure(
+            text="Scan Directory",
+            fg_color=COLOR_MAC_ACCENT,
+            hover_color=COLOR_MAC_ACCENT_HOVER,
+            command=self.scan_folder,
+            state="normal"
+        )
         self.stats_label.configure(text="Scan failed.")
         self.status_msg.configure(text=f"Error scanning: {err_msg}", text_color=COLOR_MAC_RED)
         self.organize_btn.configure(state="disabled")
@@ -809,11 +902,23 @@ class MovieOrganizerApp(ctk.CTk):
         selected = sum(1 for row in self.row_widgets if row['chk_var'].get())
         self.stats_label.configure(text=f"Total: {total} | Selected: {selected}")
         
-        # ACTIVATE OR DISABLE BUTTON ACCORDING TO SELECTION
-        if selected == 0:
+        # ACTIVATE OR DISABLE BUTTON ACCORDING TO SELECTION AND SCAN STATE
+        if getattr(self, "scan_running", False):
+            self.organize_btn.configure(state="disabled")
+        elif selected == 0:
             self.organize_btn.configure(state="disabled")
         else:
             self.organize_btn.configure(state="normal")
+
+    def select_all_movies(self):
+        for row in self.row_widgets:
+            row['chk_var'].set(True)
+        self.update_selection_stats()
+
+    def deselect_all_movies(self):
+        for row in self.row_widgets:
+            row['chk_var'].set(False)
+        self.update_selection_stats()
 
     def run_organization(self):
         selected_items = []
@@ -856,7 +961,23 @@ class MovieOrganizerApp(ctk.CTk):
         self.progress_bar.pack_forget()
         self.scan_btn.configure(state="normal")
         self.status_msg.configure(text=f"Successfully organized {count} movie(s)!", text_color=COLOR_MAC_GREEN)
-        self.scan_folder()
+        
+        # Clear the movie cards from UI since they are organized
+        for row in self.row_widgets:
+            for w in row.values():
+                if isinstance(w, (tk.Widget, ctk.CTkBaseClass)):
+                    try:
+                        w.destroy()
+                    except Exception:
+                        pass
+        self.row_widgets = []
+        self.movies_data = []
+        self.update_selection_stats()
+        self.empty_label.pack(expand=True, pady=100)
+        
+        # Check and update undo status immediately (shows the undo button)
+        self.check_undo_status()
+        
         # Start a user-configured timer to clean up undo history
         self.after(self.undo_timeout_seconds * 1000, self.cleanup_undo_history)
 
@@ -880,14 +1001,18 @@ class MovieOrganizerApp(ctk.CTk):
                             diff = (datetime.now() - dt).total_seconds()
                             if diff > self.undo_timeout_seconds:
                                 # Over limit! Delete it.
-                                os.remove(history_file)
-                                self.undo_btn.configure(state="disabled", border_color=COLOR_MAC_CARD_BORDER, text_color=COLOR_MAC_MUTED)
+                                try:
+                                    os.remove(history_file)
+                                except Exception:
+                                    pass
+                                self.undo_btn.pack_forget()
                                 return
             except Exception:
                 pass
+            self.undo_btn.pack(side="left", padx=(0, 10), before=self.organize_btn)
             self.undo_btn.configure(state="normal", border_color=COLOR_MAC_RED, text_color=COLOR_MAC_RED)
         else:
-            self.undo_btn.configure(state="disabled", border_color=COLOR_MAC_CARD_BORDER, text_color=COLOR_MAC_MUTED)
+            self.undo_btn.pack_forget()
 
     def update_connection_warning(self):
         if getattr(self.organizer, "connection_failed", False):

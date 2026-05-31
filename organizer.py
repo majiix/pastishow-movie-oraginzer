@@ -24,7 +24,7 @@ QUALITY_KEYWORDS = [
     r'aac', r'dts', r'dd5\.1', r'ac3', r'eac3', r'atmos',
     r'yts', r'yify', r'rarbg', r'psa', r'qxr', r'galaxyrg', r'tigole', r'fgt', r'spark',
     r'dual[\s\.-]audio', r'multi[\s\.-]audio', r'multi', r'dubbed', r'subbed',
-    r'season', r's\d{2}e\d{2}', r's\d{2}'
+    r'season\s*\d+', r's\d+e\d+', r's\d+', r'ep\d+', r'episode\s*\d+'
 ]
 
 class MovieOrganizer:
@@ -110,7 +110,7 @@ class MovieOrganizer:
             
         return title, year
 
-    def scan_movies(self, min_size_mb=150, scan_subfolders=False, api_key=None, proxy_url=None):
+    def scan_movies(self, min_size_mb=150, scan_subfolders=False, api_key=None, proxy_url=None, on_movie_scanned=None, is_paused_fn=None):
         """
         Scans the target directory for movies.
         Returns a tuple: (movies_list, ignored_count)
@@ -162,12 +162,36 @@ class MovieOrganizer:
                                 sibling_base, sibling_ext = os.path.splitext(sibling)
                                 sibling_ext = sibling_ext.lower()
                                 
-                                # Check if it starts with the video base name (e.g. Inception.2010.en.srt starts with Inception.2010)
-                                # And is an allowed associated file extension
-                                if sibling_base.startswith(video_base) and sibling_ext in ALL_ASSOCIATED_EXTENSIONS:
-                                    # Store relative path to target_dir
-                                    sib_rel = os.path.relpath(sibling_full, self.target_dir)
-                                    associated.append(sib_rel)
+                                # Check if the sibling file is related to this movie/show and not a video file
+                                if sibling_ext not in VIDEO_EXTENSIONS:
+                                    s_base_l = sibling_base.lower()
+                                    v_base_l = video_base.lower()
+                                    
+                                    # Cleaned name match
+                                    s_title, s_year = self.clean_name(sibling)
+                                    s_title_l = s_title.lower()
+                                    m_title_l = title.lower()
+                                    
+                                    is_related = False
+                                    if s_base_l.startswith(v_base_l) or v_base_l.startswith(s_base_l):
+                                        is_related = True
+                                    elif s_title_l == m_title_l or s_title_l.startswith(m_title_l + " ") or m_title_l.startswith(s_title_l + " "):
+                                        is_related = True
+                                    else:
+                                        # Check if movie title is contained as a word/prefix
+                                        v_clean = re.sub(r'[\._\-\(\)\[\]\{\}\+]', ' ', v_base_l).strip()
+                                        s_clean = re.sub(r'[\._\-\(\)\[\]\{\}\+]', ' ', s_base_l).strip()
+                                        if m_title_l in s_clean or s_title_l in v_clean:
+                                            is_related = True
+                                            
+                                    # Year safeguard: if both have years, they must match
+                                    if is_related and s_year and year and s_year != year:
+                                        is_related = False
+                                        
+                                    if is_related:
+                                        # Store relative path to target_dir
+                                        sib_rel = os.path.relpath(sibling_full, self.target_dir)
+                                        associated.append(sib_rel)
                     except OSError:
                         pass
 
@@ -184,12 +208,11 @@ class MovieOrganizer:
                     
         sorted_movies = sorted(movies, key=lambda m: m['parsed_title'])
         
-        # Detect TV shows based on parsed title frequencies
-        from collections import Counter
-        title_counts = Counter(m['parsed_title'].lower().strip() for m in sorted_movies)
+        # Detect TV shows strictly based on Season & Episode pattern (e.g. S01E02)
         for m in sorted_movies:
-            t = m['parsed_title'].lower().strip()
-            m['is_tv_show'] = title_counts[t] > 1
+            orig = m['original_filename']
+            is_tv_pattern = bool(re.search(r'(?:\b|[\(\[\._-])s\d+e\d+(?:\b|[\)\]\._-])', orig, re.IGNORECASE))
+            m['is_tv_show'] = is_tv_pattern
         
         # Concurrent fetching of IMDb ratings if API key is provided
         if api_key and sorted_movies:
@@ -263,8 +286,25 @@ class MovieOrganizer:
             
             # Fetch ratings sequentially, one by one, to avoid flooding OMDb API
             for movie in sorted_movies:
+                # Handle pause
+                while is_paused_fn and is_paused_fn():
+                    time.sleep(0.1)
+                
                 fetch_rating(movie)
+                
+                if on_movie_scanned:
+                    on_movie_scanned(movie)
                 time.sleep(0.15)
+        else:
+            # If no API key, trigger the callback one by one with a small smooth delay
+            for movie in sorted_movies:
+                # Handle pause
+                while is_paused_fn and is_paused_fn():
+                    time.sleep(0.1)
+                
+                if on_movie_scanned:
+                    on_movie_scanned(movie)
+                time.sleep(0.05)
                 
         return sorted_movies, ignored_count
 
@@ -373,6 +413,9 @@ class MovieOrganizer:
                 folder_parts.append(f"{dir_title} ({year.strip()})")
             else:
                 folder_parts.append(dir_title)
+                
+            if is_tv:
+                folder_parts.append("[S]")
                 
             if rating and rating.strip():
                 folder_parts.append(f"[{rating.strip()}]")
