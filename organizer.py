@@ -8,7 +8,7 @@ import urllib.error
 import time
 from datetime import datetime
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # Extensions categorized
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg'}

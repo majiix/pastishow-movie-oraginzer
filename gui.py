@@ -8,7 +8,7 @@ from organizer import MovieOrganizer
 import json
 from datetime import datetime
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 CONFIG_FILE = os.path.expanduser("~/.movie_organizer_config.json")
 
 def load_config():
