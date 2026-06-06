@@ -238,7 +238,6 @@ class MovieOrganizer:
                     year = movie['parsed_year']
                     data = None
                     
-                    # 1. Try with title and year first (HTTPS preferred)
                     if year and year.strip():
                         params = {'t': title, 'y': year.strip(), 'apikey': api_key}
                         if is_tv:
@@ -249,19 +248,22 @@ class MovieOrganizer:
                             with opener.open(req, timeout=3.0) as response:
                                 data = json.loads(response.read().decode('utf-8'))
                         except Exception as e_inner:
-                            self._log_debug(f"Inner OMDb search failed for '{title}' (year {year}): {e_inner}")
+                            self._log_debug(f"OMDb search failed for '{title}' (year {year}): {e_inner}")
                             if isinstance(e_inner, urllib.error.URLError) or "timeout" in str(e_inner).lower() or "connection" in str(e_inner).lower():
                                 self.connection_failed = True
-                    
-                    # 2. Fallback to title-only if first search failed or wasn't attempted
-                    if not data or data.get('Response') != 'True':
+                    else:
                         params = {'t': title, 'apikey': api_key}
                         if is_tv:
                             params['type'] = 'series'
                         url = "https://www.omdbapi.com/?" + urllib.parse.urlencode(params)
                         req = urllib.request.Request(url, headers={'User-Agent': 'MovieOrganizer/1.0'})
-                        with opener.open(req, timeout=3.0) as response:
-                            data = json.loads(response.read().decode('utf-8'))
+                        try:
+                            with opener.open(req, timeout=3.0) as response:
+                                data = json.loads(response.read().decode('utf-8'))
+                        except Exception as e_inner:
+                            self._log_debug(f"OMDb search failed for '{title}' (no year): {e_inner}")
+                            if isinstance(e_inner, urllib.error.URLError) or "timeout" in str(e_inner).lower() or "connection" in str(e_inner).lower():
+                                self.connection_failed = True
                             
                     # Process response
                     if data and data.get('Response') == 'True':
@@ -276,11 +278,14 @@ class MovieOrganizer:
                             movie['poster_url'] = poster
                         if genre and genre != 'N/A':
                             movie['genre'] = genre
+                        movie['omdb_failed'] = False
                     else:
                         err_msg = data.get('Error', 'Unknown Error') if data else 'No response data'
                         self._log_debug(f"OMDb match failed for '{title}': {err_msg}")
+                        movie['omdb_failed'] = True
                 except Exception as e:
                     self._log_debug(f"OMDb connection/general error for '{title}': {e}")
+                    movie['omdb_failed'] = True
                     if isinstance(e, urllib.error.URLError) or "timeout" in str(e).lower() or "connection" in str(e).lower():
                         self.connection_failed = True
             
@@ -307,6 +312,89 @@ class MovieOrganizer:
                 time.sleep(0.05)
                 
         return sorted_movies, ignored_count
+
+    def fetch_omdb_details(self, movies, api_key, proxy_url=None, on_movie_fetched=None):
+        """
+        Fetches OMDb details for a list of movies.
+        """
+        self.connection_failed = False
+        if not api_key or not movies:
+            return
+            
+        ssl_context = ssl._create_unverified_context()
+        handlers = [urllib.request.HTTPSHandler(context=ssl_context), urllib.request.HTTPHandler]
+        if proxy_url:
+            if proxy_url.lower() == 'none':
+                handlers.append(urllib.request.ProxyHandler({}))
+            else:
+                handlers.append(urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+        opener = urllib.request.build_opener(*handlers)
+        
+        def fetch_rating(movie):
+            title = movie['parsed_title']
+            is_tv = movie.get('is_tv_show', False)
+            try:
+                year = movie['parsed_year']
+                data = None
+                
+                if year and year.strip():
+                    params = {'t': title, 'y': year.strip(), 'apikey': api_key}
+                    if is_tv:
+                        params['type'] = 'series'
+                    url = "https://www.omdbapi.com/?" + urllib.parse.urlencode(params)
+                    req = urllib.request.Request(url, headers={'User-Agent': 'MovieOrganizer/1.0'})
+                    try:
+                        with opener.open(req, timeout=3.0) as response:
+                            data = json.loads(response.read().decode('utf-8'))
+                    except Exception as e_inner:
+                        if isinstance(e_inner, urllib.error.URLError) or "timeout" in str(e_inner).lower() or "connection" in str(e_inner).lower():
+                            self.connection_failed = True
+                else:
+                    params = {'t': title, 'apikey': api_key}
+                    if is_tv:
+                        params['type'] = 'series'
+                    url = "https://www.omdbapi.com/?" + urllib.parse.urlencode(params)
+                    req = urllib.request.Request(url, headers={'User-Agent': 'MovieOrganizer/1.0'})
+                    try:
+                        with opener.open(req, timeout=3.0) as response:
+                            data = json.loads(response.read().decode('utf-8'))
+                    except Exception as e_inner:
+                        if isinstance(e_inner, urllib.error.URLError) or "timeout" in str(e_inner).lower() or "connection" in str(e_inner).lower():
+                            self.connection_failed = True
+                        
+                if data and data.get('Response') == 'True':
+                    rating = data.get('imdbRating')
+                    poster = data.get('Poster')
+                    genre = data.get('Genre')
+                    
+                    movie['omdb_data'] = data
+                    if rating and rating != 'N/A':
+                        movie['imdb_rating'] = rating
+                    else:
+                        movie['imdb_rating'] = None
+                        
+                    if poster and poster != 'N/A' and poster.startswith('http'):
+                        movie['poster_url'] = poster
+                    else:
+                        movie['poster_url'] = None
+                        
+                    if genre and genre != 'N/A':
+                        movie['genre'] = genre
+                    else:
+                        movie['genre'] = None
+                    movie['omdb_failed'] = False
+                else:
+                    movie['omdb_failed'] = True
+            except Exception as e:
+                movie['omdb_failed'] = True
+                if isinstance(e, urllib.error.URLError) or "timeout" in str(e).lower() or "connection" in str(e).lower():
+                    self.connection_failed = True
+                    
+        for movie in movies:
+            fetch_rating(movie)
+            if on_movie_fetched:
+                on_movie_fetched(movie)
+            time.sleep(0.15)
 
     def organize_movies(self, selections, naming_pattern="{title} ({year})", api_key=None, proxy_url=None):
         """
@@ -365,9 +453,7 @@ class MovieOrganizer:
                         except Exception as e_inner:
                             if isinstance(e_inner, urllib.error.URLError) or "timeout" in str(e_inner).lower() or "connection" in str(e_inner).lower():
                                 self.connection_failed = True
-                            
-                    # Fallback to title-only
-                    if not data or data.get('Response') != 'True':
+                    else:
                         params = {'t': title, 'apikey': api_key}
                         if is_tv:
                             params['type'] = 'series'

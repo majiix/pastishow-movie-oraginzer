@@ -529,6 +529,21 @@ class MovieOrganizerApp(ctk.CTk):
         self.undo_btn.pack(side="left", padx=(0, 10))
         self.check_undo_status()
 
+        self.retry_failed_btn = ctk.CTkButton(
+            actions_container, 
+            text="↻ Retry Failed OMDb", 
+            height=34,
+            width=160,
+            fg_color="transparent",
+            border_color="#FF9500",
+            border_width=1,
+            text_color="#FF9500",
+            hover_color=COLOR_MAC_RED_BG, # transparent red/orange hover background
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=8,
+            command=self.retry_failed_searches
+        )
+
         self.organize_btn = ctk.CTkButton(
             actions_container, 
             text="Organize Selected", 
@@ -591,6 +606,7 @@ class MovieOrganizerApp(ctk.CTk):
             command=self.toggle_scan_pause
         )
         self.organize_btn.configure(state="disabled")
+        self.retry_failed_btn.pack_forget()
         
         min_size = self.min_size_mb
         scan_sub = self.scan_subfolders_val
@@ -658,13 +674,14 @@ class MovieOrganizerApp(ctk.CTk):
         card.pack(fill="x", pady=6, padx=4)
         card.pack_propagate(False)
         
-        # Grid columns for card layout: Checkbox, Original Filename, Arrow icon, Editable Title, Editable Year, Badge area
+        # Grid columns for card layout: Checkbox, Original Filename, Arrow icon, Editable Title, Editable Year, Type Select, Badge area
         card.grid_columnconfigure(0, weight=0, minsize=40)  # Checkbox
         card.grid_columnconfigure(1, weight=3)              # Original Filename
         card.grid_columnconfigure(2, weight=0, minsize=30)  # Arrow pointer
         card.grid_columnconfigure(3, weight=3)              # Editable Title
         card.grid_columnconfigure(4, weight=0, minsize=80)  # Editable Year
-        card.grid_columnconfigure(5, weight=0, minsize=240) # Badges
+        card.grid_columnconfigure(5, weight=0, minsize=90)  # Type Select (Movie / Series)
+        card.grid_columnconfigure(6, weight=0, minsize=240) # Badges
         
         # 1. Checkbox
         chk_var = tk.BooleanVar(value=True)
@@ -732,110 +749,43 @@ class MovieOrganizerApp(ctk.CTk):
         )
         year_entry.grid(row=0, column=4, padx=5, pady=14)
         
-        # 6. Details Badges
-        badges_frame = ctk.CTkFrame(card, fg_color="transparent")
-        badges_frame.grid(row=0, column=5, padx=15, pady=14, sticky="e")
-        
-        # TV Show badge (Orange)
-        if movie.get('is_tv_show'):
-            tv_badge = ctk.CTkLabel(
-                badges_frame, 
-                text="SERIES", 
-                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                fg_color="#FF9500", # macOS orange
-                text_color="#FFFFFF",
-                corner_radius=4,
-                width=48,
-                height=18
-            )
-            tv_badge.pack(side="left", padx=2)
-        
-        # IMDb Rating badge
-        rating_val = movie.get('imdb_rating')
-        if rating_val:
-            rating_badge = ctk.CTkLabel(
-                badges_frame, 
-                text=f"⭐ {rating_val}", 
-                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                fg_color="#F5C518",
-                text_color="#000000",
-                corner_radius=4,
-                width=48,
-                height=18
-            )
-            rating_badge.pack(side="left", padx=2)
-            
-        # Genre badge (Purple)
-        genre_val = movie.get('genre')
-        if genre_val:
-            first_genre = genre_val.split(',')[0].strip().upper()
-            genre_badge = ctk.CTkLabel(
-                badges_frame, 
-                text=first_genre, 
-                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                fg_color="#5856D6", # macOS purple
-                text_color="#FFFFFF",
-                corner_radius=4,
-                width=55,
-                height=18
-            )
-            genre_badge.pack(side="left", padx=2)
-        
-        # Size badge
-        size_val = movie['size_mb']
-        size_txt = f"{size_val / 1024:.1f} GB" if size_val >= 1000 else f"{int(size_val)} MB"
-        size_badge = ctk.CTkLabel(
-            badges_frame, 
-            text=size_txt, 
-            font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-            fg_color="#3A3A3C",
-            text_color="#FFFFFF",
-            corner_radius=4,
-            width=55,
-            height=18
+        # 6. Type Select (Movie / Series Select option)
+        type_var = tk.StringVar(value="Series" if movie.get('is_tv_show') else "Movie")
+        type_menu = ctk.CTkOptionMenu(
+            card,
+            values=["Movie", "Series"],
+            variable=type_var,
+            width=80,
+            height=28,
+            fg_color=COLOR_MAC_INPUT,
+            button_color=COLOR_MAC_INPUT,
+            button_hover_color=COLOR_MAC_CARD_BORDER,
+            dropdown_fg_color=COLOR_MAC_CARD,
+            dropdown_hover_color=COLOR_MAC_INPUT,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            dropdown_font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6,
+            command=lambda val, r=idx: self.on_card_type_changed(val, r)
         )
-        size_badge.pack(side="left", padx=2)
+        type_menu.grid(row=0, column=5, padx=5, pady=14)
         
-        # Subtitle badge (Green)
-        associated_files = movie.get('associated_files', [])
-        subtitle_exts = {'.srt', '.ass', '.sub', '.idx', '.vtt', '.ssa'}
-        sub_count = len([f for f in associated_files if os.path.splitext(f)[1].lower() in subtitle_exts])
-        if sub_count > 0:
-            sub_badge = ctk.CTkLabel(
-                badges_frame, 
-                text=f"SUB x{sub_count}" if sub_count > 1 else "SUB", 
-                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                fg_color=COLOR_MAC_GREEN,
-                text_color="#FFFFFF",
-                corner_radius=4,
-                width=42,
-                height=18
-            )
-            sub_badge.pack(side="left", padx=2)
-            
-        # Info badge (Blue)
-        info_count = len(associated_files) - sub_count
-        if info_count > 0:
-            info_badge = ctk.CTkLabel(
-                badges_frame, 
-                text=f"INF x{info_count}" if info_count > 1 else "INF", 
-                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                fg_color=COLOR_MAC_ACCENT,
-                text_color="#FFFFFF",
-                corner_radius=4,
-                width=42,
-                height=18
-            )
-            info_badge.pack(side="left", padx=2)
+        # 7. Details Badges
+        badges_frame = ctk.CTkFrame(card, fg_color="transparent")
+        badges_frame.grid(row=0, column=6, padx=15, pady=14, sticky="e")
         
         # Store references
-        self.row_widgets.append({
+        row = {
             'frame': card,
             'chk_var': chk_var,
             'title_var': title_var,
             'year_var': year_var,
+            'type_var': type_var,
+            'badges_frame': badges_frame,
             'movie_idx': idx
-        })
+        }
+        self.row_widgets.append(row)
+        
+        self.update_card_badges(row, movie)
 
     def finish_scan(self, movies, ignored_count, min_size):
         self.scan_running = False
@@ -880,10 +830,19 @@ class MovieOrganizerApp(ctk.CTk):
         self.check_undo_status()
         self.update_connection_warning()
 
+        # Check if there are failed OMDb searches to show retry button
+        failed_count = sum(1 for m in self.movies_data if m.get('omdb_failed'))
+        if failed_count > 0 and self.omdb_key:
+            self.retry_failed_btn.pack(side="left", padx=(0, 10), before=self.organize_btn)
+            self.retry_failed_btn.configure(state="normal")
+        else:
+            self.retry_failed_btn.pack_forget()
+
     def scan_failed(self, err_msg):
         self.scan_running = False
         self.progress_bar.stop()
         self.progress_bar.pack_forget()
+        self.retry_failed_btn.pack_forget()
         
         # Restore scan button
         self.scan_btn.configure(
@@ -910,6 +869,208 @@ class MovieOrganizerApp(ctk.CTk):
         else:
             self.organize_btn.configure(state="normal")
 
+    def update_card_badges(self, row, movie):
+        for child in row['badges_frame'].winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+                
+        # 1. SERIES badge
+        if movie.get('is_tv_show'):
+            tv_badge = ctk.CTkLabel(
+                row['badges_frame'], 
+                text="SERIES", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color="#FF9500",
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=48,
+                height=18
+            )
+            tv_badge.pack(side="left", padx=2)
+            
+        # 2. OMDb Failed badge
+        if movie.get('omdb_failed'):
+            failed_badge = ctk.CTkLabel(
+                row['badges_frame'], 
+                text="✕ OMDb", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color=COLOR_MAC_RED,
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=50,
+                height=18
+            )
+            failed_badge.pack(side="left", padx=2)
+            
+        # 3. Rating badge
+        rating_val = movie.get('imdb_rating')
+        if rating_val:
+            rating_badge = ctk.CTkLabel(
+                row['badges_frame'], 
+                text=f"⭐ {rating_val}", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color="#F5C518",
+                text_color="#000000",
+                corner_radius=4,
+                width=48,
+                height=18
+            )
+            rating_badge.pack(side="left", padx=2)
+            
+        # 4. Genre badge
+        genre_val = movie.get('genre')
+        if genre_val:
+            first_genre = genre_val.split(',')[0].strip().upper()
+            genre_badge = ctk.CTkLabel(
+                row['badges_frame'], 
+                text=first_genre, 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color="#5856D6",
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=55,
+                height=18
+            )
+            genre_badge.pack(side="left", padx=2)
+            
+        # 5. Size badge
+        size_val = movie['size_mb']
+        size_txt = f"{size_val / 1024:.1f} GB" if size_val >= 1000 else f"{int(size_val)} MB"
+        size_badge = ctk.CTkLabel(
+            row['badges_frame'], 
+            text=size_txt, 
+            font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+            fg_color="#3A3A3C",
+            text_color="#FFFFFF",
+            corner_radius=4,
+            width=55,
+            height=18
+        )
+        size_badge.pack(side="left", padx=2)
+        
+        # 6. Subtitle badge
+        associated_files = movie.get('associated_files', [])
+        subtitle_exts = {'.srt', '.ass', '.sub', '.idx', '.vtt', '.ssa'}
+        sub_count = len([f for f in associated_files if os.path.splitext(f)[1].lower() in subtitle_exts])
+        if sub_count > 0:
+            sub_badge = ctk.CTkLabel(
+                row['badges_frame'], 
+                text=f"SUB x{sub_count}" if sub_count > 1 else "SUB", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color=COLOR_MAC_GREEN,
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=42,
+                height=18
+            )
+            sub_badge.pack(side="left", padx=2)
+            
+        # 7. Info badge
+        info_count = len(associated_files) - sub_count
+        if info_count > 0:
+            info_badge = ctk.CTkLabel(
+                row['badges_frame'], 
+                text=f"INF x{info_count}" if info_count > 1 else "INF", 
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                fg_color=COLOR_MAC_ACCENT,
+                text_color="#FFFFFF",
+                corner_radius=4,
+                width=42,
+                height=18
+            )
+            info_badge.pack(side="left", padx=2)
+
+    def on_card_type_changed(self, val, idx):
+        movie = self.movies_data[idx]
+        movie['is_tv_show'] = (val == "Series")
+        # Find the matching row widget and update badges
+        for row in self.row_widgets:
+            if row['movie_idx'] == idx:
+                self.update_card_badges(row, movie)
+                break
+
+    def retry_failed_searches(self):
+        failed_items = []
+        for row in self.row_widgets:
+            idx = row['movie_idx']
+            movie = self.movies_data[idx]
+            if movie.get('omdb_failed'):
+                # Read current text input values in case user edited them
+                movie['parsed_title'] = row['title_var'].get().strip()
+                movie['parsed_year'] = row['year_var'].get().strip()
+                movie['is_tv_show'] = (row['type_var'].get() == "Series")
+                failed_items.append(movie)
+                
+        if not failed_items:
+            return
+            
+        self.status_msg.configure(text="Retrying failed OMDb lookups...", text_color="#FFFFFF")
+        self.progress_bar.pack(anchor="w", pady=(4, 0))
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(0)
+        self.scan_btn.configure(state="disabled")
+        self.organize_btn.configure(state="disabled")
+        self.retry_failed_btn.configure(state="disabled")
+        
+        omdb_key = self.omdb_key
+        proxy_url = self.proxy_url
+        
+        total = len(failed_items)
+        completed = 0
+        
+        def _on_fetched(movie):
+            nonlocal completed
+            completed += 1
+            progress = completed / total
+            self.after(0, lambda: self.progress_bar.set(progress))
+            self.after(0, lambda m=movie: self.refresh_movie_card_badges(m))
+            
+        def _bg_retry():
+            try:
+                self.organizer.fetch_omdb_details(
+                    failed_items, 
+                    api_key=omdb_key,
+                    proxy_url=proxy_url,
+                    on_movie_fetched=_on_fetched
+                )
+                self.after(0, self.finish_retry)
+            except Exception as e:
+                self.after(0, lambda: self.retry_failed(str(e)))
+                
+        threading.Thread(target=_bg_retry, daemon=True).start()
+
+    def refresh_movie_card_badges(self, movie):
+        for row in self.row_widgets:
+            idx = row['movie_idx']
+            if self.movies_data[idx]['original_relative_path'] == movie['original_relative_path']:
+                self.update_card_badges(row, movie)
+                break
+
+    def finish_retry(self):
+        self.progress_bar.pack_forget()
+        self.scan_btn.configure(state="normal")
+        self.update_selection_stats()
+        self.update_connection_warning()
+        
+        # Count remaining failed items
+        failed_count = sum(1 for m in self.movies_data if m.get('omdb_failed'))
+        if failed_count > 0:
+            self.status_msg.configure(text=f"Retry finished. {failed_count} search(es) still failed.", text_color=COLOR_MAC_RED)
+            self.retry_failed_btn.pack(side="left", padx=(0, 10), before=self.organize_btn)
+            self.retry_failed_btn.configure(state="normal")
+        else:
+            self.status_msg.configure(text="All OMDb searches resolved successfully!", text_color=COLOR_MAC_GREEN)
+            self.retry_failed_btn.pack_forget()
+
+    def retry_failed(self, err_msg):
+        self.progress_bar.pack_forget()
+        self.scan_btn.configure(state="normal")
+        self.status_msg.configure(text=f"Retry failed: {err_msg}", text_color=COLOR_MAC_RED)
+        self.retry_failed_btn.configure(state="normal")
+        self.update_selection_stats()
+
     def select_all_movies(self):
         for row in self.row_widgets:
             row['chk_var'].set(True)
@@ -929,6 +1090,7 @@ class MovieOrganizerApp(ctk.CTk):
                 movie = self.movies_data[idx].copy()
                 movie['parsed_title'] = row['title_var'].get().strip()
                 movie['parsed_year'] = row['year_var'].get().strip()
+                movie['is_tv_show'] = (row['type_var'].get() == "Series")
                 selected_items.append(movie)
                 
         if not selected_items:
